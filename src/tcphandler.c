@@ -7,22 +7,28 @@
 #include "lwip/pbuf.h"
 #include "lwip/tcp.h"
 
-/*
-#if !defined(EC2_IP)
-#error EC2_IP not defined
-#endif
-*/
-
 #ifndef EC2_IP
 #define EC2_IP "192.168.1.1"
 #endif
 
 #define TCP_PORT 4242
-//#define DEBUG_printf printf
+#define DEBUG_printf printf
 #define BUF_SIZE 2048
+
+//set this to 0 to disable printfs (more efficient for mcu)
+#define DEBUG_PRINT_ENABLED 1
 
 #define TEST_ITERATIONS 10
 #define POLL_TIME_S 5
+
+/*
+ * This program conncts to WAP, then to an IP of an EC2 Server. 
+ * It then reads the buffer on the EC2 Server
+ * Afterwards it writes the data back to the server.
+ * The data (2048 Byte buffer) is broken up in the network layer; ie the transport layer app(this app)
+ * will send all aat one step/function call, but then the network decides how to segment the data through the network.
+ * Expect that the data will come in 2 packets.
+ */
 
 #if 0
 static void dump_bytes(const uint8_t *bptr, uint32_t len) {
@@ -58,7 +64,7 @@ typedef struct TCP_CLIENT_T_ { //super important
 static TCP_CLIENT_T* tcp_client_init() {
     TCP_CLIENT_T *state = calloc(1, sizeof(TCP_CLIENT_T));
     if(!state) {
-        //DEBUG_printf("failed to allocate state\n");
+        DEBUG_printf("failed to allocate state\n");
         return NULL;
     }
     ip4addr_aton(EC2_IP, &state->remote_addr);
@@ -76,7 +82,7 @@ static err_t tcp_client_close(void *arg) {
         tcp_err(state->tcp_pcb, NULL);
         err = tcp_close(state->tcp_pcb);
         if(err!=ERR_OK){
-            //DEBUG_printf("close failed %d, calling abort\n",err);
+            DEBUG_printf("close failed %d, calling abort\n",err);
             tcp_abort(state->tcp_pcb);
             err = ERR_ABRT;
         }
@@ -85,12 +91,12 @@ static err_t tcp_client_close(void *arg) {
     return err;
 }
 
-static err_t tcp_result(void *arg, int status) {
+static err_t tcp_result(void *arg, int status) { 
     TCP_CLIENT_T *state = (TCP_CLIENT_T*)arg;
     if(status == 0) {
-        //DEBUG_printf("test success\n");
+        DEBUG_printf("test success\n");
     } else {
-        //DEBUG_printf("test failed %d\n", status);
+        DEBUG_printf("test failed %d\n", status);
     }
     state->complete = true;
     return tcp_client_close(arg);
@@ -99,7 +105,7 @@ static err_t tcp_result(void *arg, int status) {
 //
 //no response is an error; poll is a keep-alive-connection function
 static err_t tcp_client_poll(void *arg, struct tcp_pcb *tpcb) {
-    //DEBUG_printf("tcp_client_poll\n");
+    DEBUG_printf("tcp_client_poll\n");
     return tcp_result(arg, -1); //no response is an error? ??
 }
 
@@ -110,14 +116,14 @@ static err_t tcp_client_connected(void *arg, struct tcp_pcb *tpcb, err_t err) {
         return tcp_result(arg, err);
     }
     state->connected=true;
-    //DEBUG_printf("Waiting for buffer from server\n");
+    DEBUG_printf("Waiting for buffer from server\n");
     return ERR_OK;
 }
 
 //increment/checking data packets
 static err_t tcp_client_sent(void *arg, struct tcp_pcb *tpcb,u16_t len){
    TCP_CLIENT_T *state = (TCP_CLIENT_T*)arg; 
-   //DEBUG_printf("tcp_client_sent %u\n", len);
+   DEBUG_printf("tcp_client_sent %u\n", len);
    state->sent_len += len;
    
    if(state->sent_len >= BUF_SIZE) {
@@ -131,7 +137,7 @@ static err_t tcp_client_sent(void *arg, struct tcp_pcb *tpcb,u16_t len){
        //receive new buffer from the server 
        state->buffer_len = 0;
        state->sent_len = 0;
-       //DEBUG_printf("waiting for buffer from the server \n");
+       DEBUG_printf("waiting for buffer from the server \n");
    }
    return ERR_OK;
 }
@@ -141,10 +147,10 @@ err_t tcp_client_recv(void *arg, struct tcp_pcb *tpcb, struct pbuf *p, err_t err
     if(!p){
         return tcp_result(arg,-1);
     }
-    //picow_tcp_client line 140
+    //pico examples explanation : picow_tcp_client line 140
     cyw43_arch_lwip_check();
     if(p->tot_len>0){
-        //DEBUG_printf("recv %d err %d\n", p->tot_len, err);
+        DEBUG_printf("recv %d err %d\n", p->tot_len, err);
         for (struct pbuf *q = p; q!=NULL; q=q->next) {
             DUMP_BYTES(q->payload, q->len);
         }
@@ -159,13 +165,13 @@ err_t tcp_client_recv(void *arg, struct tcp_pcb *tpcb, struct pbuf *p, err_t err
     pbuf_free(p);
 
     if(state->buffer_len == BUF_SIZE) {
-        //DEBUG_printf("Writing %d bytes to server\n", state->buffer_len);
+        DEBUG_printf("Writing %d bytes to server\n", state->buffer_len);
         err_t err = tcp_write(tpcb,
                 state->buffer,
                 state->buffer_len,
                 TCP_WRITE_FLAG_COPY);
         if(err!=ERR_OK){
-            //DEBUG_printf("failed to write data");
+            DEBUG_printf("failed to write data");
             return tcp_result(arg,-1);
         }
     }
@@ -183,19 +189,19 @@ static void tcp_client_err(void *arg, err_t err){
 
 static bool tcp_client_open(void *arg) {
     TCP_CLIENT_T *state = (TCP_CLIENT_T*)arg;
-    //DEBUG_printf("Connecting to %s port %u\n", ip4addr_ntoa(&state->remote_addr), TCP_PORT);
+    DEBUG_printf("Connecting to %s port %u\n", ip4addr_ntoa(&state->remote_addr), TCP_PORT);
     state->tcp_pcb = tcp_new_ip_type(IP_GET_TYPE(&state->remote_addr));
     if(!state->tcp_pcb){
-        //DEBUG_printf("failed to create pcb\n");
+        DEBUG_printf("failed to create pcb\n");
         return false;
     }
 
     //see, all of the tcp_x functions use a callback api (other than tcp_x); lets me make my own client callback functions; in the event that i make a server, or i need to serve packets via tcp, i can use this module as a way to accomplish this.
     tcp_arg(state->tcp_pcb, state);
-    tcp_poll(state->tcp_pcb, tcp_client_poll, POLL_TIME_S*2); //implement
-    tcp_sent(state->tcp_pcb, tcp_client_sent); //implement
-    tcp_recv(state->tcp_pcb, tcp_client_recv); //implement
-    tcp_err(state->tcp_pcb, tcp_client_err); //implement
+    tcp_poll(state->tcp_pcb, tcp_client_poll, POLL_TIME_S*2);
+    tcp_sent(state->tcp_pcb, tcp_client_sent);
+    tcp_recv(state->tcp_pcb, tcp_client_recv);
+    tcp_err(state->tcp_pcb, tcp_client_err);
 
     state->buffer_len = 0;
 
@@ -256,6 +262,7 @@ int main() {
     for(int n=0;n<10;n++){
         run_tcp_client_test(); 
     }
+    printf("complete\n");
     cyw43_arch_deinit();
     return 0;
 }

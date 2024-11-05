@@ -28,7 +28,8 @@ target_include_directories(${ProjectName} PRIVATE
 target_link_libraries(${ProjectName} 
     pico_stdlib
     #try with poll, then try with threadsafe version (preferred)
-    pico_cyw43_arch_lwip_poll
+    #pico_cyw43_arch_lwip_poll
+    pico_cyw43_arch_lwip_threadsafe_background
 )
 
 pico_enable_stdio_usb(${ProjectName} 1)
